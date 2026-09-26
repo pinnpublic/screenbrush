@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="src/ScreenBrush/ScreenBrush.csproj" />
+  <Folder Name="/tests/">
+    <Project Path="tests/ScreenBrush.Checks/ScreenBrush.Checks.csproj" />
+  </Folder>
+</Solution>

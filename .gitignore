@@ -1,0 +1,8 @@
+.tools/
+**/bin/
+**/obj/
+artifacts/
+.vs/
+/검토 및 수정.md
+/실행.cmd
+/실행계획.md
