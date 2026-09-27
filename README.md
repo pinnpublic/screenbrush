@@ -1,4 +1,4 @@
-﻿# ScreenBrush for Windows
+﻿# ScreenBrush
 
 **지금 보고 있는 화면 위에 쓰고, 그리고, 강조하세요.**
 
