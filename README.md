@@ -2,6 +2,14 @@
 
 Windows 화면 위에 필기하고 도형을 그리는 앱입니다.
 
+<table>
+  <tr><th>도구 모음</th><th>필기 예시</th></tr>
+  <tr>
+    <td valign="top"><img src="docs/images/toolbar.png" alt="ScreenBrush 도구 모음 — 필기 도구, 색상, 화이트보드 및 확대 설정" width="240"></td>
+    <td valign="top"><img src="docs/images/brush-samples.png" alt="ScreenBrush 렌더러로 그린 볼펜과 연필의 굵기별 필기 예시" width="560"></td>
+  </tr>
+</table>
+
 ## 1. 실행과 빠른 시작
 
 `ScreenBrush.exe` 실행 → **트레이 아이콘 더블클릭** → 도구 선택 → 화면에 그리기.
