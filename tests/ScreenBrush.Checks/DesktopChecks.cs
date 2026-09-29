@@ -48,7 +48,7 @@ internal static class DesktopChecks
         app.Startup += async (_, _) =>
         {
             controller = new AppController(new Settings { PreserveSessionOnEscape = true, ShowToolbarOnStartup = true }, false);
-            controller.Start();
+            controller.Start(); controller.ToggleDrawing();
             controller.Toolbar.Closed += (_, _) => closed = true;
             await Task.Delay(250);
             controller.Toolbar.Activate();
@@ -63,12 +63,14 @@ internal static class DesktopChecks
             if (fromSettings)
             {
                 var dialogTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
-                dialogTimer.Tick += (_, _) =>
+                dialogTimer.Tick += async (_, _) =>
                 {
                     var dialog = app.Windows.OfType<SettingsWindow>().FirstOrDefault();
                     if (dialog == null) return;
                     dialogTimer.Stop(); dialog.Activate();
                     FocusShortcutBox(dialog);
+                    await Task.Delay(120); // Let native activation and WPF keyboard focus settle before injecting keys.
+                    Assert(dialog.IsActive && controller.Drawing, "settings fixture is focused in drawing mode");
                     SendAltF4();
                 };
                 dialogTimer.Start();
@@ -166,7 +168,7 @@ internal static class DesktopChecks
             {
                 fixture = new FixtureForm { Text = "ScreenBrush input verification", FormBorderStyle = Forms.FormBorderStyle.None, WindowState = Forms.FormWindowState.Maximized, BackColor = System.Drawing.Color.FromArgb(231, 236, 243) };
                 fixture.Show(); fixture.Activate();
-                var fixtureSettings = new Settings { PreserveSessionOnEscape = true, CycleColors = false, WheelZoomEnabled = false, WheelZoomModifiers = System.Windows.Input.ModifierKeys.Control, ZoomStepPercent = 25 };
+                var fixtureSettings = new Settings { PreserveSessionOnEscape = true, CycleColors = false, ZoomStepPercent = 25 };
                 fixtureSettings.ToolColors[Tool.Rectangle] = new ToolColor(fixtureSettings.Color, true); // Explicit per-tool rainbow fixture.
                 fixtureSettings.Shortcuts[ActionId.Quit] = new(System.Windows.Input.Key.F11, System.Windows.Input.ModifierKeys.None);
                 controller = new AppController(fixtureSettings, false); controller.Start();
@@ -186,7 +188,7 @@ internal static class DesktopChecks
                 await Task.Delay(500);
                 var overlay = controller.Overlays.First(o => o.Screen.Primary);
                 var completed = new List<Mark>(); overlay.Surface.MarkCompleted += completed.Add;
-                controller.Execute(ActionId.Marker); controller.Execute(ActionId.CycleColor);
+                controller.ToggleDrawing(); controller.Execute(ActionId.Marker); controller.Execute(ActionId.CycleColor);
                 await Task.Delay(120); // Allow the initially transparent canvas to render its input surface.
                 int forwarded = 0; overlay.WheelForward += (_, _) => forwarded++;
                 int x = overlay.Screen.Bounds.Left + 240, y = overlay.Screen.Bounds.Top + 240;
@@ -242,20 +244,22 @@ internal static class DesktopChecks
                 mouse_event(0x800, 0, 0, 120, UIntPtr.Zero); await Task.Delay(100);
                 Assert(fixture.Wheels > beforeZoomWheel, "wheel also reaches underlying content while zoomed");
                 keybd_event(0xA2, 0, 0, UIntPtr.Zero); await Task.Delay(120);
-                Assert(overlay.Surface.Zoom == 1 && overlay.CaptureImage == null, "hold temporarily suspends magnification");
+                Assert(overlay.Surface.Zoom == overlay.Zoom && overlay.CaptureImage != null && !overlay.Surface.DrawingEnabled, "hold keeps magnification and pauses only drawing");
                 keybd_event(0xA2, 0, 2, UIntPtr.Zero); await Task.Delay(150);
                 Assert(overlay.Surface.Zoom > 1 && overlay.CaptureImage != null, "release restores magnification and ink");
                 controller.Execute(ActionId.ZoomReset);
                 await Task.Delay(650);
                 Assert(overlay.Zoom == 1 && overlay.CaptureImage == null, "reset releases screen capture");
-                if (controller.Drawing) controller.EnterScreenMode(); else controller.SelectTool(controller.Settings.Tool); Assert((Native.GetWindowLongPtr(overlay.Handle, -20).ToInt64() & 0x20) != 0, "normal mode passes through");
-                controller.Settings.WheelZoomEnabled = true;
-                controller.Settings.ZoomStepPercent = 50;
+                controller.ToggleDrawing(); Assert((Native.GetWindowLongPtr(overlay.Handle, -20).ToInt64() & 0x20) != 0, "normal mode passes through");
+                controller.ToggleDrawing();
+                controller.Settings.ToggleZoomPercent = 150;
                 int beforeShortcutWheel = fixture.Wheels;
-                keybd_event(0xA2, 0, 0, UIntPtr.Zero); await Task.Delay(180);
-                mouse_event(0x800, 0, 0, 120, UIntPtr.Zero); await Task.Delay(650);
-                Assert(overlay.Zoom == 1.5 && overlay.Surface.Zoom == 1.5 && controller.Drawing, "Ctrl wheel starts zoom from normal mode using the selected 50 percent step despite the Ctrl hold key");
-                Assert(fixture.Wheels == beforeShortcutWheel, "zoom wheel is consumed rather than forwarded");
+                keybd_event(0xA0, 0, 0, UIntPtr.Zero); await Task.Delay(100);
+                mouse_event(0x800, 0, 0, 120, UIntPtr.Zero); await Task.Delay(200);
+                keybd_event(0xA0, 0, 2, UIntPtr.Zero);
+                Assert(overlay.Zoom == 1, "Shift wheel no longer zooms while drawing");
+                controller.Execute(ActionId.ToggleZoom); await Task.Delay(650);
+                Assert(overlay.Zoom == 1.5 && controller.Drawing, "Toggle uses the selected zoom target");
                 var beforePan = overlay.Surface.ViewMatrix;
                 int marksBeforePan = overlay.Surface.MarkCount;
                 Native.GetCursorPos(out var panStart);
@@ -267,17 +271,18 @@ internal static class DesktopChecks
                 overlay.PanBy(new Vector(100000, 100000));
                 Assert(overlay.Surface.ViewMatrix.OffsetX == 0 && overlay.Surface.ViewMatrix.OffsetY == 0, "pan stops at desktop edges");
                 mouse_event(0x800, 0, 0, unchecked((uint)-120), UIntPtr.Zero); await Task.Delay(650);
-                Assert(overlay.Zoom == 1, "reverse wheel zooms out");
-                controller.Settings.WheelZoomEnabled = false;
+                Assert(overlay.Zoom == 1.5, "reverse wheel also leaves the selected zoom unchanged");
+                controller.Execute(ActionId.ToggleZoom); await Task.Delay(650);
+                Assert(overlay.Zoom == 1, "second toggle returns to the original scale");
                 await Task.Delay(180);
                 mouse_event(0x800, 0, 0, 120, UIntPtr.Zero); await Task.Delay(180);
                 Assert(overlay.Zoom == 1 && fixture.Wheels > beforeShortcutWheel, "disabled wheel zoom preserves underlying wheel input");
                 keybd_event(0xA2, 0, 2, UIntPtr.Zero); await Task.Delay(180);
                 controller.Settings.ZoomStepPercent = 25;
-                if (controller.Drawing) controller.EnterScreenMode(); else controller.SelectTool(controller.Settings.Tool);
+                controller.ToggleDrawing();
                 // Performance changes must preserve all tools at high zoom and
                 // retire in-flight captures safely during rapid mode changes.
-                if (controller.Drawing) controller.EnterScreenMode(); else controller.SelectTool(controller.Settings.Tool);
+                controller.ToggleDrawing();
                 foreach (double scale in new[] { 3.0, 6.0 })
                 {
                     overlay.ChangeZoom(scale); await Task.Delay(750);
@@ -301,10 +306,10 @@ internal static class DesktopChecks
                 controller.Execute(ActionId.Redo);
                 Assert(overlay.Surface.MarkCount == 0, "redo reapplies clear");
                 controller.Execute(ActionId.Undo);
-                for (int i = 0; i < 8; i++) { if (controller.Drawing) controller.EnterScreenMode(); else controller.SelectTool(controller.Settings.Tool); await Task.Delay(15); }
+                for (int i = 0; i < 8; i++) { controller.ToggleDrawing(); await Task.Delay(15); }
                 await Task.Delay(250);
                 Assert(overlay.CaptureImage != null, "rapid mode changes discard old capture sessions and resume live capture");
-                controller.Execute(ActionId.ZoomReset); await Task.Delay(750); if (controller.Drawing) controller.EnterScreenMode(); else controller.SelectTool(controller.Settings.Tool);
+                controller.Execute(ActionId.ZoomReset); await Task.Delay(750); controller.ToggleDrawing();
                 controller.ChangeColor("#FF2563EB");
                 Assert(!controller.Settings.CycleColors && !overlay.Surface.CycleColors && completed[0].FlowColors, "solid color disables cycling without recoloring old ink");
                 await Task.Delay(100);
@@ -313,6 +318,7 @@ internal static class DesktopChecks
                 Render(settings, "artifacts/settings.png"); settings.Close();
                 Console.WriteLine("PASS: desktop integration checks complete.");
                 exitRequested = true;
+                controller.ToggleDrawing(); // Quit shortcuts, like other actions, only operate in drawing mode.
                 keybd_event(0x7A, 0, 0, UIntPtr.Zero); keybd_event(0x7A, 0, 2, UIntPtr.Zero);
                 await Task.Delay(500);
                 Assert(controller.Disposing, "F11 invokes app shutdown");
@@ -347,6 +353,11 @@ internal static class DesktopChecks
                 Render(window, "artifacts/settings.png");
                 var root = (System.Windows.Controls.DockPanel)window.Content;
                 var scroll = root.Children.OfType<System.Windows.Controls.ScrollViewer>().Single();
+                var sections = (System.Windows.Controls.StackPanel)scroll.Content;
+                var zoomSection = sections.Children.OfType<System.Windows.Controls.Border>().First(section =>
+                    ((System.Windows.Controls.StackPanel)section.Child).Children.OfType<System.Windows.Controls.TextBlock>().First().Text == "확대 / 축소");
+                scroll.ScrollToVerticalOffset(zoomSection.TranslatePoint(new Point(), sections).Y); await Task.Delay(100);
+                Render(window, "artifacts/settings-drawing.png");
                 scroll.ScrollToEnd(); await Task.Delay(100);
                 Assert(scroll.VerticalOffset > 0, "settings scrollbar reaches the lower controls");
                 Render(window, "artifacts/settings-bottom.png");

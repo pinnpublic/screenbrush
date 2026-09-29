@@ -30,7 +30,7 @@ internal sealed class ToolbarWindow : Window
         this.controller = controller;
         PreviewKeyDown += (_, e) =>
         {
-            if ((e.Key == Key.System ? e.SystemKey : e.Key) == Key.F4 && Keyboard.Modifiers == ModifierKeys.Alt && !controller.Settings.IsShortcutEnabled(ActionId.Quit))
+            if ((e.Key == Key.System ? e.SystemKey : e.Key) == Key.F4 && Keyboard.Modifiers == ModifierKeys.Alt && (!controller.Drawing || !controller.Settings.IsShortcutEnabled(ActionId.Quit)))
             { e.Handled = true; return; }
             if (e.Key != Key.Escape || Keyboard.Modifiers != ModifierKeys.None) return;
             e.Handled = true;
@@ -59,6 +59,7 @@ internal sealed class ToolbarWindow : Window
         header.Children.Add(new Image { Source = Icon, Width = 26, Height = 26, Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center });
         var title = new TextBlock { Text = "ScreenBrush", FontSize = 19, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center, Cursor = Cursors.SizeAll };
         title.MouseLeftButtonDown += (_, _) => DragMove(); header.Children.Add(title); panel.Children.Add(header);
+        panel.Children.Add(ShortcutButton("그리기 모드", ActionId.ToggleDrawing));
         status.Margin = new Thickness(0, 10, 0, 5); status.Foreground = Brush("#ABB7D0"); status.TextWrapping = TextWrapping.Wrap; panel.Children.Add(status);
         panel.Children.Add(Divider());
         panel.Children.Add(Label("필기 도구"));
@@ -120,6 +121,7 @@ internal sealed class ToolbarWindow : Window
         editBoardColor.ToolTip = "화이트보드 사용자 배경색 지정";
         boardPalette.Children.Add(editBoardColor); panel.Children.Add(boardPalette);
         panel.Children.Add(Divider());
+        panel.Children.Add(ShortcutButton("확대 토글", ActionId.ToggleZoom));
         var zoomRow = new System.Windows.Controls.Primitives.UniformGrid { Columns = 3 };
         zoomRow.Children.Add(ShortcutButton("− 축소", ActionId.ZoomOut));
         zoomRow.Children.Add(ShortcutButton("100%", ActionId.ZoomReset));
@@ -171,6 +173,9 @@ internal sealed class ToolbarWindow : Window
     }
     internal void Refresh(string? message = null)
     {
+        shortcutButtons[ActionId.ToggleDrawing].Content = controller.Drawing ? "✓ 그리기 모드 · 눌러서 해제" : "그리기 모드 켜기";
+        shortcutButtons[ActionId.ToggleDrawing].Background = controller.Drawing ? Brush("#415277") : Brush("#2C3448");
+        shortcutButtons[ActionId.ToggleZoom].Content = $"확대 토글 · {controller.Settings.ToggleZoomPercent}% ↔ 100%";
         foreach (var pair in shortcutButtons)
         {
             ToolTipService.SetShowOnDisabled(pair.Value, true);
@@ -192,7 +197,9 @@ internal sealed class ToolbarWindow : Window
         }
         cycleColor.ToolTip += "\n빨강 → 주황 → 노랑 → 초록 → 파랑 → 보라 순서로 부드럽게 변합니다. 단색을 선택하면 해제됩니다.";
         foreach (var action in new[] { ActionId.Undo, ActionId.Redo }) shortcutButtons[action].ToolTip += "\n단축키는 그리기 모드에서 동작합니다.";
-        status.ToolTip = $"{controller.Settings.HoldKey} 누르는 동안 아래 화면 조작";
+        string holdHint = controller.Settings.HoldToInteractEnabled ? $"{controller.Settings.HoldKey} 누르는 동안 아래 화면 조작" : "일시 화면 조작 꺼짐";
+        status.ToolTip = holdHint + $"\n{controller.Settings.Shortcuts[ActionId.ToggleHoldInteraction]} · 켜기 / 끄기" +
+            (controller.Settings.IsShortcutEnabled(ActionId.ToggleHoldInteraction) ? "" : " · 단축키 꺼짐");
         var selectedColor = (Color)ColorConverter.ConvertFromString(controller.Settings.Color);
         bool paletteSelected = false;
         colorLabel.Text = controller.Settings.CycleColors ? "잉크 색상 · 순환색" : "잉크 색상 · 사용자 색";
@@ -213,7 +220,7 @@ internal sealed class ToolbarWindow : Window
         customColor.ToolTip = "사용자 잉크색 지정" + (customSelected ? $" · 선택됨 ({controller.Settings.Color})" : "");
         cycleColor.Content = controller.Settings.CycleColors ? "✓  순환색 · 빨 → 주 → 노 → 초 → 파 → 보" : "순환색 · 빨 → 주 → 노 → 초 → 파 → 보";
         cycleColor.Background = controller.Settings.CycleColors ? Brush("#415277") : Brush("#2C3448");
-        status.Text = message ?? (controller.Drawing ? "Esc · 아래 화면 조작" : "도구 선택 · 바로 그리기") + $"\n{controller.Settings.HoldKey} 누르는 동안 아래 화면 조작";
+        status.Text = message ?? (controller.Drawing ? "Esc · 아래 화면 조작" : $"{controller.Settings.Shortcuts[ActionId.ToggleDrawing]} · 그리기 켜기") + "\n" + holdHint;
         freehand.Background = controller.Settings.Tool != Tool.Eraser && controller.Settings.DrawingMode == DrawingMode.Freehand ? Brush("#415277") : Brush("#2C3448");
         foreach (var item in tools)
         {

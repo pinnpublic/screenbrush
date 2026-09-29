@@ -19,6 +19,12 @@ internal sealed class Hotkeys : IDisposable
     private bool held, disposed;
     internal Func<bool>? SuppressHold { get; set; }
     internal Key HoldKey { get; set; }
+    private bool holdEnabled = true;
+    internal bool HoldEnabled
+    {
+        get => holdEnabled;
+        set { if (holdEnabled == value) return; holdEnabled = value; RefreshHold(); }
+    }
     internal bool Suspended { get; set; }
     internal bool EditingEnabled { get; set; }
     internal event Action<ActionId>? Triggered;
@@ -99,7 +105,7 @@ internal sealed class Hotkeys : IDisposable
         return Native.CallNextHookEx(hook, code, message, data);
     }
     private void SetHeld(bool value) { if (held == value) return; held = value; HoldChanged?.Invoke(value); }
-    private void RefreshHold() { if (!disposed) SetHeld(!Suspended && SuppressHold?.Invoke() != true && (Native.GetAsyncKeyState(KeyInterop.VirtualKeyFromKey(HoldKey)) & 0x8000) != 0); }
+    private void RefreshHold() { if (!disposed) SetHeld(HoldEnabled && !Suspended && SuppressHold?.Invoke() != true && (Native.GetAsyncKeyState(KeyInterop.VirtualKeyFromKey(HoldKey)) & 0x8000) != 0); }
     internal void ResetHold() => SetHeld(false);
     private void Clear() { foreach (var pair in active) if (!UsesKeyboardHook(pair.Key, pair.Value)) Native.UnregisterHotKey(source.Handle, 100 + (int)pair.Key); active.Clear(); }
     public void Dispose() { if (disposed) return; disposed = true; Suspended = true; recovery.Stop(); Clear(); Native.UnhookWindowsHookEx(hook); source.Dispose(); }

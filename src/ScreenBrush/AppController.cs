@@ -20,7 +20,8 @@ internal sealed class AppController : IDisposable
     private readonly List<OverlayWindow> overlays = new();
     private ToolbarWindow? toolbar;
     private Hotkeys? hotkeys;
-    private WheelZoomHook? wheelZoom;
+    private bool? registeredDrawing;
+    private ZoomInteraction? zoomInteraction;
     private Forms.NotifyIcon? tray;
     private System.Drawing.Icon? trayIcon;
     private string? startupWarning;
@@ -46,35 +47,26 @@ internal sealed class AppController : IDisposable
             overlay.Surface.ColorPhaseForNewMark = () => nextColorHue;
             overlay.Surface.MarkCompleted += mark => { if (mark.FlowColors) nextColorHue = FlowColorRendering.EndHue(mark); };
             overlay.WheelForward += ForwardWheel;
-            overlay.ViewPresented += KeepControlsAboveCanvas;
+            overlay.CaptureStarting = () => UpdateExclusion(true);
+            overlay.ViewPresented += () =>
+            {
+                KeepControlsAboveCanvas();
+                if (zoomInteraction != null && !overlays.Any(o => o.ZoomInteractionActive))
+                { zoomInteraction.Dispose(); zoomInteraction = null; }
+                else zoomInteraction?.SyncWindows();
+                if (!overlays.Any(o => o.NeedsDesktopCapture)) UpdateExclusion(false);
+            };
             overlay.CaptureFailed += error => { ResetZoom(); toolbar?.Refresh(error); };
             overlays.Add(overlay); overlay.Show();
         }
         toolbar = new ToolbarWindow(this);
         new WindowInteropHelper(toolbar).EnsureHandle();
         Application.Current.MainWindow = toolbar;
-        hotkeys = new Hotkeys(Settings.HoldKey);
-        hotkeys.SuppressHold = () => Settings.MatchesWheelZoom(WheelZoomHook.Modifiers);
-        wheelZoom = new WheelZoomHook();
-        wheelZoom.Wheel = (delta, point) =>
-        {
-            if (Disposing || settingsOpen || savingScreen || !Settings.MatchesWheelZoom(WheelZoomHook.Modifiers)) return false;
-            var target = overlays.FirstOrDefault(o => o.Screen.Bounds.Contains(point.X, point.Y));
-            if (target == null) return false;
-            double change = delta / 120.0 * Settings.ZoomStepPercent / 100.0;
-            // Consume the wheel now; screen capture and drawing stay outside the hook.
-            Application.Current.Dispatcher.BeginInvoke(() =>
-            {
-                if (Disposing || settingsOpen || savingScreen) return;
-                hotkeys.ResetHold();
-                Zoom(change, target);
-            });
-            return true;
-        };
+        hotkeys = new Hotkeys(Settings.HoldKey) { HoldEnabled = Settings.HoldToInteractEnabled };
         hotkeys.Triggered += ExecuteShortcut;
         hotkeys.DrawingDismissed += EnterScreenMode;
         hotkeys.HoldChanged += value => { holding = value; UpdateMode(); };
-        string? error = hotkeys.Apply(Settings.ActiveShortcuts());
+        string? error = ApplyRuntimeShortcuts();
         trayIcon = AppIcon.CreateTrayIcon();
         tray = new Forms.NotifyIcon { Icon = trayIcon, Text = "ScreenBrush", Visible = true, ContextMenuStrip = new Forms.ContextMenuStrip() };
         tray.ContextMenuStrip.Items.Add("도구 모음 열기", null, (_, _) => ShowToolbar()).Tag = ActionId.ToggleToolbar;
@@ -100,9 +92,22 @@ internal sealed class AppController : IDisposable
         if (toolbar.IsVisible) toolbar.Hide();
         else ShowToolbar();
     }
-    internal void EnterScreenMode()
+    private string? ApplyRuntimeShortcuts()
+    {
+        if (hotkeys == null) return null;
+        registeredDrawing = Drawing;
+        return hotkeys.Apply(Settings.ActiveShortcuts(Drawing));
+    }
+    internal void ToggleDrawing()
     {
         if (Disposing || settingsOpen || savingScreen) return;
+        if (Drawing) { EnterScreenMode(); return; }
+        Drawing = true;
+        UpdateTools(); UpdateMode();
+    }
+    internal void EnterScreenMode()
+    {
+        if (Disposing || settingsOpen || savingScreen || !Drawing) return;
         foreach (var overlay in overlays) overlay.Surface.Finish();
         Drawing = false;
         UpdateMode();
@@ -128,14 +133,14 @@ internal sealed class AppController : IDisposable
         if (tool is Tool.Marker or Tool.Ballpoint or Tool.Pencil) Settings.BrushTool = tool;
         else if (tool != Tool.Eraser) Settings.DrawingMode = Enum.Parse<DrawingMode>(tool.ToString());
         Settings.Tool = tool; Settings.RestoreToolColor();
-        Drawing = true; UpdateTools(); UpdateMode();
+        UpdateTools(); UpdateMode();
     }
     internal void SelectFreehand()
     {
         Settings.RememberToolColor();
         Settings.DrawingMode = DrawingMode.Freehand;
         Settings.Tool = Settings.BrushTool; Settings.RestoreToolColor();
-        Drawing = true; UpdateTools(); UpdateMode();
+        UpdateTools(); UpdateMode();
     }
     internal void ChangeColor(string color)
     {
@@ -173,7 +178,7 @@ internal sealed class AppController : IDisposable
             settingsOpen = false;
             if (!Disposing)
             {
-                string? error = hotkeys.Apply(Settings.ActiveShortcuts());
+                string? error = ApplyRuntimeShortcuts();
                 hotkeys.Suspended = false;
                 UpdateMode();
                 if (error != null) toolbar.Refresh(error);
@@ -219,6 +224,7 @@ internal sealed class AppController : IDisposable
     }
     private void UpdateTools()
     {
+        if (hotkeys != null) hotkeys.HoldEnabled = Settings.HoldToInteractEnabled;
         if (tray?.ContextMenuStrip is { } menu)
             foreach (Forms.ToolStripItem item in menu.Items)
                 if (item.Tag is ActionId action)
@@ -244,16 +250,44 @@ internal sealed class AppController : IDisposable
     private void UpdateMode()
     {
         if (hotkeys != null) hotkeys.EditingEnabled = Drawing;
-        if (!Settings.WhiteboardEnabled && EffectiveDrawing && overlays.Any(o => o.Zoom > 1)) UpdateExclusion(true);
+        bool keepZoom = Drawing && holding && !settingsOpen && !savingScreen;
+        bool desktopZoom = (!Settings.WhiteboardEnabled && EffectiveDrawing || keepZoom) && overlays.Any(o => o.Zoom > 1 || o.Surface.Zoom > 1);
+        if (desktopZoom) UpdateExclusion(true);
         foreach (var overlay in overlays)
         {
             // Esc hides retained ink; the temporary hold key keeps its existing behavior.
             overlay.Surface.Visibility = Drawing ? Visibility.Visible : Visibility.Hidden;
-            overlay.SetEnabled(EffectiveDrawing);
+            overlay.SetEnabled(EffectiveDrawing, keepZoom);
         }
-        if (Settings.WhiteboardEnabled || !EffectiveDrawing || overlays.All(o => o.Zoom == 1)) UpdateExclusion(false);
+        if (!desktopZoom && !overlays.Any(o => o.NeedsDesktopCapture)) UpdateExclusion(false);
+        string? interactionError = null;
+        if (overlays.Any(o => o.ZoomInteractionActive))
+        {
+            if (zoomInteraction == null)
+            {
+                try
+                {
+                    zoomInteraction = new ZoomInteraction(overlays, toolbar == null ? IntPtr.Zero : new WindowInteropHelper(toolbar).Handle);
+                    var interaction = zoomInteraction;
+                    interaction.Failed += error =>
+                    {
+                        if (Disposing || zoomInteraction != interaction) return;
+                        zoomInteraction = null; holding = false; UpdateMode(); toolbar?.Refresh(error);
+                    };
+                }
+                catch (Exception e) when (e is System.ComponentModel.Win32Exception or ArgumentException or InvalidOperationException)
+                {
+                    holding = false;
+                    foreach (var overlay in overlays) overlay.SetEnabled(EffectiveDrawing);
+                    interactionError = e.Message;
+                }
+            }
+        }
+        else { zoomInteraction?.Dispose(); zoomInteraction = null; }
+        zoomInteraction?.SyncWindows();
         KeepControlsAboveCanvas();
-        toolbar?.Refresh(holding && Drawing ? "아래 화면 조작 중 · 키를 떼면 필기로 복귀" : null);
+        string? shortcutError = !settingsOpen && !savingScreen && registeredDrawing != Drawing ? ApplyRuntimeShortcuts() : null;
+        toolbar?.Refresh(interactionError ?? shortcutError ?? (holding && Drawing ? "아래 화면 조작 중 · 키를 떼면 필기로 복귀" : null));
     }
     private OverlayWindow Target()
     {
@@ -272,7 +306,7 @@ internal sealed class AppController : IDisposable
     }
     internal void ExecuteShortcut(ActionId action)
     {
-        if (Settings.IsShortcutEnabled(action)) Execute(action);
+        if ((Drawing || action == ActionId.ToggleDrawing) && Settings.IsShortcutEnabled(action)) Execute(action);
     }
     internal void Execute(ActionId action)
     {
@@ -285,6 +319,9 @@ internal sealed class AppController : IDisposable
         if (Enum.TryParse<Tool>(action.ToString(), out var tool)) { SelectTool(tool); return; }
         switch (action)
         {
+            case ActionId.ToggleHoldInteraction: Settings.HoldToInteractEnabled = !Settings.HoldToInteractEnabled; UpdateTools(); break;
+            case ActionId.ToggleDrawing: ToggleDrawing(); break;
+            case ActionId.ToggleZoom: ToggleZoom(); break;
             case ActionId.ToggleAutoFade: Settings.AutoFadeEnabled = !Settings.AutoFadeEnabled; UpdateTools(); break;
             case ActionId.Freehand: SelectFreehand(); break;
             case ActionId.SaveScreen: SaveScreen(); break;
@@ -299,6 +336,17 @@ internal sealed class AppController : IDisposable
             case ActionId.Clear: foreach (var overlay in overlays) overlay.Surface.Clear(); break;
         }
     }
+    private void ToggleZoom()
+    {
+        var target = Target();
+        if (target.Zoom > 1) target.ChangeZoom(1);
+        else
+        {
+            if (!Settings.WhiteboardEnabled && !UpdateExclusion(true)) return;
+            target.ChangeZoom(Settings.ToggleZoomPercent / 100.0);
+        }
+        UpdateMode();
+    }
     private void Zoom(double change, OverlayWindow? target = null)
     {
         target ??= Target();
@@ -306,12 +354,12 @@ internal sealed class AppController : IDisposable
         Drawing = true;
         target.ChangeZoom(Settings.ClampZoom(target.Zoom + change));
         UpdateMode();
-        toolbar?.Refresh($"화면 + 필기 확대  {target.Zoom:P0}\n조작 모드에서는 잠시 원래 배율로 표시");
+        toolbar?.Refresh($"화면 + 필기 확대  {target.Zoom:P0}\n일시 조작 키를 눌러도 현재 배율 유지");
     }
     private void ResetZoom()
     {
         foreach (var overlay in overlays) overlay.ChangeZoom(1);
-        UpdateExclusion(false); toolbar?.Refresh();
+        UpdateExclusion(overlays.Any(o => o.NeedsDesktopCapture)); toolbar?.Refresh();
     }
     private bool UpdateExclusion(bool value)
     {
@@ -408,7 +456,7 @@ internal sealed class AppController : IDisposable
             if (!Disposing)
             {
                 if (hidden) { toolbar.ShowActivated = false; toolbar.Show(); toolbar.ShowActivated = true; }
-                string? error = hotkeys.Apply(Settings.ActiveShortcuts());
+                string? error = ApplyRuntimeShortcuts();
                 hotkeys.Suspended = false;
                 KeepControlsAboveCanvas();
                 toolbar.Refresh(error ?? message);
@@ -427,7 +475,7 @@ internal sealed class AppController : IDisposable
             settingsOpen = false;
             if (!Disposing)
             {
-                string? error = hotkeys.Apply(Settings.ActiveShortcuts());
+                string? error = ApplyRuntimeShortcuts();
                 hotkeys.HoldKey = Settings.HoldKey; hotkeys.Suspended = false;
                 UpdateMode(); if (error != null) toolbar.Refresh(error);
             }
@@ -439,7 +487,7 @@ internal sealed class AppController : IDisposable
         draft.ToolbarX = Settings.ToolbarX;
         draft.ToolbarY = Settings.ToolbarY;
         if (draft.Validate() is string error) return error;
-        if (!settingsOpen && hotkeys?.Apply(draft.ActiveShortcuts()) is string registrationError) return registrationError;
+        if (!settingsOpen && hotkeys?.Apply(draft.ActiveShortcuts(Drawing)) is string registrationError) return registrationError;
         try
         {
             if (startWithWindows is bool enabled) StartupRegistration.Save(enabled, () => draft.Save());
@@ -451,12 +499,13 @@ internal sealed class AppController : IDisposable
             return "설정을 저장하지 못했습니다: " + e.Message;
         }
         startupWarning = null;
+        bool maximumChanged = Settings.MaxZoomPercent != draft.MaxZoomPercent;
         Settings = draft.Clone(); if (hotkeys != null) hotkeys.HoldKey = Settings.HoldKey;
         Settings.InitializeDrawingSelection();
         Settings.InitializeToolColors();
         Settings.RestoreToolColor();
         foreach (var overlay in overlays)
-            if (overlay.Zoom > Settings.MaxZoomPercent / 100.0) overlay.ChangeZoom(Settings.ClampZoom(overlay.Zoom));
+            if (maximumChanged && overlay.Zoom > Settings.MaxZoomPercent / 100.0) overlay.ChangeZoom(Settings.ClampZoom(overlay.Zoom));
         ApplyBoard(); UpdateTools(); UpdateMode(); return null;
     }
     internal void Quit() { Dispose(); Application.Current.Shutdown(); }
@@ -471,7 +520,8 @@ internal sealed class AppController : IDisposable
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or ExternalException or NotSupportedException)
             { MessageBox.Show("화면 저장을 완료하지 못했습니다.\n" + e.Message, "ScreenBrush"); }
         }
-        wheelZoom?.Dispose(); hotkeys?.Dispose(); tray?.Dispose(); trayIcon?.Dispose();
+        zoomInteraction?.Dispose(); zoomInteraction = null;
+        hotkeys?.Dispose(); tray?.Dispose(); trayIcon?.Dispose();
         foreach (var overlay in overlays) overlay.Close();
         toolbar?.Close();
         try { if (saveOnExit && startupWarning == null) Settings.Save(); }

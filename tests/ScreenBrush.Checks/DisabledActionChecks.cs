@@ -23,7 +23,7 @@ internal static class DisabledActionChecks
                 var settings = new Settings { ShowToolbarOnStartup = true };
                 foreach (var action in Enum.GetValues<ActionId>()) settings.EnabledActions[action] = false;
                 using var controller = new AppController(settings, false);
-                controller.Start(); controller.SelectTool(Tool.Marker); await Task.Delay(150);
+                controller.Start(); controller.ToggleDrawing(); controller.SelectTool(Tool.Marker); await Task.Delay(150);
                 Require(controller.Overlays.All(o => o.Surface.DrawingEnabled), "Disabling shortcuts does not block drawing with a selected brush.");
                 foreach (string name in new[] { "tools", "colorButtons", "shortcutButtons" })
                 {

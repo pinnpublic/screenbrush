@@ -20,7 +20,7 @@ internal static class ErrorPathChecks
             try
             {
                 using var controller = new AppController(new Settings { ShowToolbarOnStartup = true }, false);
-                controller.Start(); controller.SelectTool(Tool.Marker);
+                controller.Start(); controller.ToggleDrawing(); controller.SelectTool(Tool.Marker);
                 bool timedOut = false;
                 IntPtr dialog = IntPtr.Zero;
                 var escape = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };

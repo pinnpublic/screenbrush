@@ -27,7 +27,7 @@ internal sealed class SettingsWindow : Window
             }
             if (key != Key.F4 || Keyboard.Modifiers != ModifierKeys.Alt) return;
             e.Handled = true;
-            if (quitQueued || controller.Disposing || !controller.Settings.IsShortcutEnabled(ActionId.Quit)) return;
+            if (quitQueued || controller.Disposing || (!controller.Drawing || !controller.Settings.IsShortcutEnabled(ActionId.Quit))) return;
             quitQueued = true;
             Dispatcher.BeginInvoke(() => { if (!controller.Disposing) controller.Quit(); });
         };
@@ -109,45 +109,37 @@ internal sealed class SettingsWindow : Window
         var startupWindow = new ComboBox { ItemsSource = new[] { "트레이에서 시작", "도구 모음 창 표시" }, SelectedIndex = draft.ShowToolbarOnStartup ? 1 : 0, Padding = new Thickness(8) };
         startupWindow.SelectionChanged += (_, _) => draft.ShowToolbarOnStartup = startupWindow.SelectedIndex == 1;
         panel.Children.Add(startupWindow);
-        panel.Children.Add(new TextBlock { Text = "다음 실행부터 적용됩니다. 앱은 화면을 가리지 않고 대기하며, 도구 버튼이나 단축키를 선택하면 그리기를 시작합니다.", TextWrapping = TextWrapping.Wrap, FontSize = 12, Margin = new Thickness(0, 8, 0, 0) });
+        panel.Children.Add(new TextBlock { Text = "다음 실행부터 적용됩니다. 앱은 화면을 가리지 않고 대기하며, 그리기 모드 버튼이나 전환 단축키로 그리기를 시작합니다.", TextWrapping = TextWrapping.Wrap, FontSize = 12, Margin = new Thickness(0, 8, 0, 0) });
         var rememberPosition = new CheckBox { Content = "도구 모음 마지막 위치 기억", IsChecked = draft.RememberToolbarPosition, Foreground = Foreground, Margin = new Thickness(0, 16, 0, 8) };
         rememberPosition.Checked += (_, _) => draft.RememberToolbarPosition = true;
         rememberPosition.Unchecked += (_, _) => draft.RememberToolbarPosition = false;
         panel.Children.Add(rememberPosition);
         panel.Children.Add(new TextBlock { Text = "기본: 켜짐. 다음 실행 시 마지막 위치에서 엽니다. 해제하면 기본 위치에서 열며, 모니터 변경 시 화면 안으로 위치를 보정합니다.", TextWrapping = TextWrapping.Wrap, FontSize = 12 });
-        panel = AddSection(sections, "Esc 동작");
+        panel = AddSection(sections, "그리기 해제 / Esc");
         var preserveSession = new CheckBox { Content = "Esc 후 필기·기록·확대 유지", IsChecked = draft.PreserveSessionOnEscape, Foreground = Foreground, Margin = new Thickness(0, 0, 0, 12) };
         preserveSession.Checked += (_, _) => draft.PreserveSessionOnEscape = true;
         preserveSession.Unchecked += (_, _) => draft.PreserveSessionOnEscape = false;
         panel.Children.Add(preserveSession);
-        panel.Children.Add(new TextBlock { Text = "기본: 해제. Esc를 누르면 모든 필기·실행 취소·다시 실행 기록을 지우고 화이트보드를 끄며 확대를 100%로 초기화합니다.\n체크하면 내용·기록을 유지하고 도구 선택 시 필기와 확대를 복원합니다. 화이트보드는 자동으로 다시 켜지지 않습니다. 설정창의 Esc 취소에는 적용하지 않습니다.", FontSize = 12, TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(new TextBlock { Text = "기본: 해제. Esc 또는 모드 전환으로 그리기를 해제하면 모든 필기·실행 취소·다시 실행 기록을 지우고 화이트보드를 끄며 확대를 100%로 초기화합니다.\n체크하면 내용·기록을 유지하고 그리기 모드를 켜면 필기와 확대를 복원합니다. 화이트보드는 자동으로 다시 켜지지 않습니다. 설정창의 Esc 취소에는 적용하지 않습니다.", FontSize = 12, TextWrapping = TextWrapping.Wrap });
         panel = AddSection(sections, "확대 / 축소");
-        var wheelZoom = new CheckBox { Content = "보조키 + 마우스 휠로 확대·축소", IsChecked = draft.WheelZoomEnabled, Foreground = Foreground, Margin = new Thickness(0, 0, 0, 16) };
-        panel.Children.Add(wheelZoom);
-        var modifiers = new StackPanel { Orientation = Orientation.Horizontal, IsEnabled = draft.WheelZoomEnabled };
-        foreach (var modifier in new[] { ModifierKeys.Control, ModifierKeys.Shift, ModifierKeys.Alt })
-        {
-            var box = new CheckBox { Content = modifier == ModifierKeys.Control ? "Ctrl" : modifier.ToString(), IsChecked = draft.WheelZoomModifiers.HasFlag(modifier), Foreground = Foreground, Margin = new Thickness(0, 0, 20, 0) };
-            box.Checked += (_, _) => draft.WheelZoomModifiers |= modifier;
-            box.Unchecked += (_, _) => draft.WheelZoomModifiers &= ~modifier;
-            modifiers.Children.Add(box);
-        }
-        wheelZoom.Checked += (_, _) => { draft.WheelZoomEnabled = true; modifiers.IsEnabled = true; };
-        wheelZoom.Unchecked += (_, _) => { draft.WheelZoomEnabled = false; modifiers.IsEnabled = false; if (draft.WheelZoomModifiers == ModifierKeys.None) { draft.WheelZoomModifiers = ModifierKeys.Control; ((CheckBox)modifiers.Children[0]).IsChecked = true; } };
-        panel.Children.Add(modifiers);
-        panel.Children.Add(new TextBlock { Text = "선택한 키를 함께 누르고 위로 돌리면 확대, 아래로 돌리면 축소합니다.\n해당 조합은 일시 화면 조작보다 우선하며 아래 앱으로 휠을 전달하지 않습니다.", TextWrapping = TextWrapping.Wrap, FontSize = 12, Margin = new Thickness(0, 8, 0, 12) });
+        var toggleZoomLabel = new TextBlock { Text = $"확대 토글 배율  {draft.ToggleZoomPercent}%", Margin = new Thickness(0, 0, 0, 8) };
+        panel.Children.Add(toggleZoomLabel);
+        var toggleZoom = new Slider { Minimum = 150, Maximum = 500, TickFrequency = 25, IsSnapToTickEnabled = true, Value = draft.ToggleZoomPercent };
+        toggleZoom.ValueChanged += (_, _) => { draft.ToggleZoomPercent = (int)Math.Round(toggleZoom.Value); toggleZoomLabel.Text = $"확대 토글 배율  {draft.ToggleZoomPercent}%"; };
+        panel.Children.Add(toggleZoom);
+        panel.Children.Add(new TextBlock { Text = "150~500% · 기본 300% · 확대 토글로 지정 배율과 100%를 전환합니다. 마우스 휠은 확대에 사용하지 않습니다.", TextWrapping = TextWrapping.Wrap, FontSize = 12, Margin = new Thickness(0, 8, 0, 12) });
         var zoomLabel = new TextBlock { Text = $"확대·축소 간격  {draft.ZoomStepPercent}%p", Margin = new Thickness(0, 12, 0, 8) };
         panel.Children.Add(zoomLabel);
         var zoomStep = new Slider { Minimum = 5, Maximum = 100, TickFrequency = 5, IsSnapToTickEnabled = true, Value = draft.ZoomStepPercent };
         zoomStep.ValueChanged += (_, _) => { draft.ZoomStepPercent = (int)Math.Round(zoomStep.Value); zoomLabel.Text = $"확대·축소 간격  {draft.ZoomStepPercent}%p"; };
         panel.Children.Add(zoomStep);
-        panel.Children.Add(new TextBlock { Text = "5~100%p · 기본 10%p (100% → 110% → 120%)\n휠 한 칸·단축키·버튼에 공통 적용", TextWrapping = TextWrapping.Wrap, FontSize = 12, Margin = new Thickness(0, 8, 0, 18) });
-        var maxZoomLabel = new TextBlock { Text = $"최대 확대 배율  {draft.MaxZoomPercent}%", Margin = new Thickness(0, 8, 0, 8) };
+        panel.Children.Add(new TextBlock { Text = "5~100%p · 기본 10%p (100% → 110% → 120%)\n단계별 확대·축소 단축키와 버튼에 적용", TextWrapping = TextWrapping.Wrap, FontSize = 12, Margin = new Thickness(0, 8, 0, 18) });
+        var maxZoomLabel = new TextBlock { Text = $"단계별 확대 최대 배율  {draft.MaxZoomPercent}%", Margin = new Thickness(0, 8, 0, 8) };
         panel.Children.Add(maxZoomLabel);
         var maxZoom = new Slider { Minimum = 100, Maximum = 600, TickFrequency = 25, IsSnapToTickEnabled = true, Value = draft.MaxZoomPercent };
-        maxZoom.ValueChanged += (_, _) => { draft.MaxZoomPercent = (int)Math.Round(maxZoom.Value); maxZoomLabel.Text = $"최대 확대 배율  {draft.MaxZoomPercent}%"; };
+        maxZoom.ValueChanged += (_, _) => { draft.MaxZoomPercent = (int)Math.Round(maxZoom.Value); maxZoomLabel.Text = $"단계별 확대 최대 배율  {draft.MaxZoomPercent}%"; };
         panel.Children.Add(maxZoom);
-        panel.Children.Add(new TextBlock { Text = "100~600% · 기본 300% · 저장 시 모든 확대 조작에 적용", TextWrapping = TextWrapping.Wrap, FontSize = 12, Margin = new Thickness(0, 8, 0, 18) });
+        panel.Children.Add(new TextBlock { Text = "100~600% · 기본 300% · 단계별 확대에 적용 · 토글 배율은 별도", TextWrapping = TextWrapping.Wrap, FontSize = 12, Margin = new Thickness(0, 8, 0, 18) });
         panel = AddSection(sections, "자동 사라지기");
         var autoFade = new CheckBox { Content = "자동 사라지기 사용", IsChecked = draft.AutoFadeEnabled, Foreground = Foreground, Margin = new Thickness(0, 0, 0, 12) };
         autoFade.Checked += (_, _) => draft.AutoFadeEnabled = true;
@@ -200,7 +192,7 @@ internal sealed class SettingsWindow : Window
         }));
         panel.Children.Add(new TextBlock { Text = "마우스가 있는 모니터의 화면과 필기를 PNG로 저장합니다. 기본 파일명을 끄면 저장할 때 이름을 지정합니다. 같은 이름은 번호를 붙여 보존합니다.", FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) });
         panel = AddSection(sections, "단축키");
-        panel.Children.Add(new TextBlock { Text = "체크된 단축키만 사용합니다(기본: 모두 켜짐). 해제해도 버튼·컨트롤은 사용할 수 있습니다. 입력 즉시 중복·등록 충돌을 확인합니다. 충돌한 키를 변경하거나 체크를 해제하면 저장할 수 있습니다.", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 16) });
+        panel.Children.Add(new TextBlock { Text = "그리기 모드 전환 키는 항상, 다른 단축키는 그리기 모드에서만 사용합니다. 체크된 단축키만 등록합니다(기본: 모두 켜짐). 해제해도 버튼·컨트롤은 사용할 수 있습니다. 입력 즉시 중복·등록 충돌을 확인합니다. 충돌한 키를 변경하거나 체크를 해제하면 저장할 수 있습니다.", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 16) });
         var boxes = new Dictionary<ActionId, TextBox>();
         foreach (ActionId action in Enum.GetValues<ActionId>().OrderBy(action => action >= ActionId.ToggleBoard && action <= ActionId.BoardImage ? 2 : Settings.Palette.Any(color => color.Action == action) ? 1 : 0))
         {
@@ -230,8 +222,13 @@ internal sealed class SettingsWindow : Window
             boxes[action] = box; Grid.SetColumn(box, 1); row.Children.Add(box); panel.Children.Add(row);
         }
         panel = AddSection(sections, "일시 화면 조작 / 단축키 복원");
+        var holdEnabled = new CheckBox { Content = "누르는 동안 화면 조작 사용", IsChecked = draft.HoldToInteractEnabled, Foreground = Foreground, Margin = new Thickness(0, 0, 0, 8) };
+        panel.Children.Add(holdEnabled);
         panel.Children.Add(new TextBlock { Text = "누르는 동안 아래 화면 조작", Margin = new Thickness(0, 18, 0, 8) });
-        var hold = new ComboBox { ItemsSource = new[] { Key.LeftCtrl, Key.RightCtrl, Key.LeftAlt, Key.RightAlt, Key.LeftShift, Key.RightShift, Key.Space }, SelectedItem = draft.HoldKey, Padding = new Thickness(8) };
+        var hold = new ComboBox { ItemsSource = new[] { Key.LeftCtrl, Key.RightCtrl, Key.LeftAlt, Key.RightAlt, Key.LeftShift, Key.RightShift, Key.Space }, SelectedItem = draft.HoldKey, IsEnabled = draft.HoldToInteractEnabled, Padding = new Thickness(8) };
+        holdEnabled.Checked += (_, _) => { draft.HoldToInteractEnabled = true; hold.IsEnabled = true; };
+        holdEnabled.Unchecked += (_, _) => { draft.HoldToInteractEnabled = false; hold.IsEnabled = false; };
+        panel.Children.Add(new TextBlock { Text = "기본: 켜짐. 끄면 지정 키를 눌러도 그리기를 유지합니다. 일시 화면 조작 전환 단축키로도 켜고 끌 수 있습니다.", TextWrapping = TextWrapping.Wrap, FontSize = 12, Margin = new Thickness(0, 0, 0, 8) });
         hold.SelectionChanged += (_, _) => { if (hold.SelectedItem is Key key) { draft.HoldKey = key; CheckShortcuts(); } }; panel.Children.Add(hold);
         panel.Children.Add(new TextBlock { Text = "기능 단축키는 다른 앱에서도 동작합니다.\n일시 조작 키는 아래 프로그램에도 전달됩니다.", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 12, 0, 12), FontSize = 12 });
         panel.Children.Add(ToolbarWindow.Button("기본 단축키 복원", () => { draft.Shortcuts = Settings.Defaults(); draft.HoldKey = Key.LeftCtrl; hold.SelectedItem = draft.HoldKey; foreach (var pair in boxes) pair.Value.Text = draft.Shortcuts[pair.Key].ToString(); CheckShortcuts(); }));

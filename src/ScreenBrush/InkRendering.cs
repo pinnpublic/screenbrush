@@ -83,6 +83,15 @@ public sealed class Mark
     }
     internal double ColorPathLength { get { _ = ColorPath; return colorPathLength; } }
     public void Invalidate() { cached = null; hitGeometry = null; shapeGeometry = null; shapePen = null; drawingBounds = null; colorPath = null; colorPathLength = 0; }
+    internal void Complete()
+    {
+        if (Finished) return;
+        Finished = true;
+        // Only pressure-sensitive freehand ink changes its tail on completion.
+        // Marker/shapes and the fitted color path remain identical to the preview.
+        if (Tool is Tool.Ballpoint or Tool.Pencil && Points.Count > 2)
+        { cached = null; hitGeometry = null; drawingBounds = null; }
+    }
     public DrawingGroup Drawing => cached ??= Build();
     public bool Hit(Point point, double radius)
     {
@@ -126,11 +135,13 @@ public sealed class Mark
     private double[] PreparePressures()
     {
         var pressures = new double[Points.Count];
+        var segments = new double[Points.Count];
+        for (int i = 1; i < Points.Count; i++) segments[i] = (Points[i].Position - Points[i - 1].Position).Length;
         double length = 0;
         for (int i = 0; i < Points.Count; i++)
         {
             var sample = Points[i];
-            if (i > 0) length += (sample.Position - Points[i - 1].Position).Length;
+            if (i > 0) length += segments[i];
             double p = sample.Pressure;
             // Arc length, rather than event count, keeps the nib taper independent of
             // mouse / tablet sampling frequency.
@@ -138,7 +149,7 @@ public sealed class Mark
             if (Finished && Points.Count > 2)
             {
                 double remaining = 0;
-                for (int j = i + 1; j < Points.Count && remaining < Width * 3; j++) remaining += (Points[j].Position - Points[j - 1].Position).Length;
+                for (int j = i + 1; j < Points.Count && remaining < Width * 3; j++) remaining += segments[j];
                 p *= 0.48 + 0.52 * Math.Min(1, remaining / Math.Max(Width * 2, 3));
             }
             pressures[i] = p;
@@ -158,7 +169,7 @@ public sealed class Mark
     }
     private Stroke StrokeFor(double[] pressures, double widthFactor, double normalOffset = 0, int strand = -1, Vector[]? normals = null)
     {
-        var points = new StylusPointCollection();
+        var points = new StylusPointCollection(Points.Count);
         for (int i = 0; i < Points.Count; i++)
         {
             double p = pressures[i];

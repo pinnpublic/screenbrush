@@ -14,6 +14,8 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        if (args.Contains("--review-render")) { ReviewChecks.Render(args.Last()); return; }
+        if (args.Contains("--review-zoom")) { ReviewChecks.RunZoom(); return; }
         if (args.Contains("--settings-load"))
         {
             var actualSettings = Settings.Load(out var warning);
@@ -24,6 +26,8 @@ internal static class Program
         }
         if (args.Contains("--error-paths")) { ErrorPathChecks.Run(); return; }
         if (args.Contains("--auto-fade")) { AutoFadeChecks.Run(); return; }
+        if (args.Contains("--zoom-interaction")) { ZoomInteractionChecks.Run(); return; }
+        if (args.Contains("--mode-shortcuts")) { ModeShortcutChecks.Run(); return; }
         if (args.Contains("--disabled-actions")) { DisabledActionChecks.Run(); return; }
         if (args.Contains("--escape")) { EscapeChecks.Run(); return; }
         if (args.Contains("--screen-save")) { ScreenSaveChecks.Run(); return; }
@@ -31,7 +35,7 @@ internal static class Program
         if (args.Contains("--alt-f4")) { DesktopChecks.AltF4(); return; }
         if (args.Contains("--toggle-hotkeys")) { DesktopChecks.AltF4(false, true); return; }
         if (args.Contains("--settings-alt-f4")) { DesktopChecks.AltF4(true); return; }
-        if (args.Contains("--resources")) { ResourceChecks.Run(); return; }
+        if (args.Contains("--resources")) { ResourceChecks.Run(args.Length > 1 ? args.Last() : "artifacts/resource-check.json"); return; }
         if (args.Contains("--startup-options")) { DesktopChecks.StartupOptions(); return; }
         if (args.Contains("--performance")) { PerformanceChecks.Run(); return; }
         if (args.Contains("--capture-performance")) { PerformanceChecks.RunCapture(); return; }
@@ -156,6 +160,16 @@ internal static class Program
             var resumedSettings = Settings.ReadSettings(System.Text.Json.JsonSerializer.Serialize(boardResume.Settings));
             Check(!resumedSettings.WhiteboardEnabled && resumedSettings.BoardToolColors[Tool.Marker].Color == "#FF123456", "Reload ignores board activation but retains board ink preferences.");
         }
+        Check(Settings.ReadSettings("{}").HoldToInteractEnabled, "Temporary screen interaction defaults on for existing settings.");
+        var holdOff = new Settings { HoldToInteractEnabled = false, HoldKey = Key.RightCtrl };
+        Check(!holdOff.Clone().HoldToInteractEnabled && holdOff.Clone().HoldKey == Key.RightCtrl, "Temporary interaction use preference persists independently of the chosen key.");
+        using (var holdController = new AppController(holdOff, false))
+        {
+            holdController.ExecuteShortcut(ActionId.ToggleHoldInteraction);
+            Check(!holdController.Settings.HoldToInteractEnabled, "Temporary interaction toggle shortcut is inactive outside drawing mode.");
+            holdController.ToggleDrawing(); holdController.ExecuteShortcut(ActionId.ToggleHoldInteraction);
+            Check(holdController.Settings.HoldToInteractEnabled, "Temporary interaction toggle shortcut works while drawing.");
+        }
         var fadeDefaults = Settings.ReadSettings("{}");
         Check(!fadeDefaults.AutoFadeEnabled && fadeDefaults.AutoFadeHoldSeconds == 3 && fadeDefaults.AutoFadeDurationSeconds == 1.5, "Auto fade defaults off with three second hold and 1.5 second fade.");
         Check(fadeDefaults.Shortcuts.ContainsKey(ActionId.ToggleAutoFade), "Auto fade shortcut migrates into legacy settings.");
@@ -175,6 +189,7 @@ internal static class Program
         Check(invalidFade.Validate() != null, "Zero fade duration is rejected.");
         using (var toggleFade = new AppController(fadeDefaults, false))
         {
+            toggleFade.ToggleDrawing();
             toggleFade.ExecuteShortcut(ActionId.ToggleAutoFade);
             Check(toggleFade.Settings.AutoFadeEnabled, "Auto fade shortcut toggles on.");
             toggleFade.Settings.EnabledActions[ActionId.ToggleAutoFade] = false;
@@ -206,11 +221,22 @@ internal static class Program
         using (var quickTools = new AppController(new Settings(), false))
         {
             quickTools.SelectTool(Tool.Rectangle);
-            Check(quickTools.Drawing, "Selecting shape immediately enables drawing.");
+            Check(!quickTools.Drawing, "Selecting a shape does not enable drawing.");
+            quickTools.ExecuteShortcut(ActionId.ToggleDrawing);
+            Check(quickTools.Drawing, "Explicit mode shortcut enables drawing.");
             quickTools.EnterScreenMode(); quickTools.EnterScreenMode();
             Check(!quickTools.Drawing, "Leaving drawing is idempotent, never toggles it back on.");
             quickTools.SelectTool(Tool.Marker);
-            Check(quickTools.Drawing && quickTools.Settings.Tool == Tool.Marker, "Selecting pen resumes drawing directly.");
+            Check(!quickTools.Drawing && quickTools.Settings.Tool == Tool.Marker, "Selecting a pen leaves drawing disabled.");
+            foreach (var action in Enum.GetValues<ActionId>().Where(a => a != ActionId.ToggleDrawing))
+            {
+                string before = System.Text.Json.JsonSerializer.Serialize(quickTools.Settings);
+                quickTools.ExecuteShortcut(action);
+                Check(!quickTools.Drawing && !quickTools.Disposing && before == System.Text.Json.JsonSerializer.Serialize(quickTools.Settings), "Inactive mode ignores every non-mode shortcut.");
+            }
+            Check(quickTools.Settings.ActiveShortcuts(false).Keys.SequenceEqual(new[] { ActionId.ToggleDrawing }), "Inactive mode only registers its mode switch.");
+            quickTools.ToggleDrawing();
+            Check(quickTools.Settings.ActiveShortcuts(true).Count == Enum.GetValues<ActionId>().Length, "Drawing mode restores all enabled bindings.");
         }
         var settings = new Settings();
         var retiredToolSettings = new Settings { Tool = (Tool)8, Width = 11, InkOpacity = .7 };
@@ -350,20 +376,17 @@ internal static class Program
         Check(zoomLimit.Validate() == null && zoomLimit.ClampZoom(2) == 1, "100 percent maximum disables magnification.");
         zoomLimit.MaxZoomPercent = 601; Check(zoomLimit.Validate() != null, "Maximum above 600 percent is rejected.");
         zoomLimit.MaxZoomPercent = 99; Check(zoomLimit.Validate() != null, "Maximum below 100 percent is rejected.");
-        Check(!settings.MatchesWheelZoom(ModifierKeys.Control), "Wheel zoom is opt-in.");
-        var wheel = settings.Clone(); wheel.WheelZoomEnabled = true; wheel.WheelZoomModifiers = ModifierKeys.Control | ModifierKeys.Shift;
-        Check(wheel.MatchesWheelZoom(ModifierKeys.Control | ModifierKeys.Shift) && !wheel.MatchesWheelZoom(ModifierKeys.Control) && !wheel.MatchesWheelZoom(ModifierKeys.Control | ModifierKeys.Shift | ModifierKeys.Alt), "Wheel zoom requires the exact selected modifiers.");
-        wheel.ZoomStepPercent = 50;
-        var wheelRoundTrip = wheel.Clone();
-        Check(wheelRoundTrip.WheelZoomEnabled && wheelRoundTrip.WheelZoomModifiers == wheel.WheelZoomModifiers && wheelRoundTrip.ZoomStepPercent == 50, "Wheel settings survive serialization.");
-        wheel.ZoomStepPercent = 0; Check(wheel.Validate() != null, "Zero zoom step is rejected.");
-        wheel.ZoomStepPercent = 101; Check(wheel.Validate() != null, "Excessive zoom step is rejected.");
-        wheel.ZoomStepPercent = 25; wheel.WheelZoomModifiers = ModifierKeys.None;
-        Check(wheel.Validate() != null, "Unmodified wheel cannot be assigned to zoom.");
+        var zoomOptions = settings.Clone(); zoomOptions.ToggleZoomPercent = 150;
+        Check(zoomOptions.Validate() == null && zoomOptions.Clone().ToggleZoomPercent == 150, "150 percent toggle target persists.");
+        zoomOptions.ToggleZoomPercent = 500; Check(zoomOptions.Validate() == null, "500 percent toggle is accepted independently from step zoom maximum.");
+        zoomOptions.ToggleZoomPercent = 149; Check(zoomOptions.Validate() != null, "Toggle below 150 percent is rejected.");
+        zoomOptions.ToggleZoomPercent = 501; Check(zoomOptions.Validate() != null, "Toggle above 500 percent is rejected.");
+        var obsoleteWheel = Settings.ReadSettings("{\"WheelZoomEnabled\":true,\"WheelZoomModifiers\":0,\"Width\":11}");
+        Check(obsoleteWheel.Width == 11 && obsoleteWheel.ToggleZoomPercent == 300 && !System.Text.Json.JsonSerializer.Serialize(obsoleteWheel).Contains("WheelZoom"), "Retired wheel zoom is ignored without losing other settings.");
         Check(settings.ColorCycleSpeed == 2, "Default color speed matches the saved preference.");
         var oldSettings = System.Text.Json.JsonSerializer.Deserialize<Settings>("{\"Width\":3}")!;
         Check(oldSettings.MaxZoomPercent == 300, "Older settings receive the 300 percent maximum.");
-        Check(oldSettings.WheelZoomEnabled && oldSettings.ZoomStepPercent == 10, "Missing wheel settings receive the saved defaults.");
+        Check(oldSettings.ToggleZoomPercent == 300 && oldSettings.ZoomStepPercent == 10, "Missing toggle zoom setting receives its default.");
         Check(oldSettings.ColorCycleSpeed == 2, "Settings without the speed field receive the new default.");
         var badSpeed = settings.Clone(); badSpeed.ColorCycleSpeed = double.NaN;
         Check(badSpeed.Validate() != null, "Non-finite color speed is rejected.");
@@ -444,6 +467,7 @@ internal static class Program
             var sample = sampler.Add(new Point(i, Math.Sin(i / 10.0)), i / 120.0, i % 2 == 0 ? 0.2f : 0.9f);
             Check(float.IsFinite(sample.Pressure) && sample.Pressure > 0 && sample.Pressure <= 1, "Pressure must stay finite and bounded.");
         }
+        ReviewChecks.CheckInk(Check);
         Console.WriteLine($"PASS: {count} checks (shortcuts, settings, zoom coordinates, rendering, pressure).");
     }
     private static Mark Marker(float pressure, bool flow = false)

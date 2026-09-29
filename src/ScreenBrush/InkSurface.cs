@@ -120,6 +120,7 @@ public sealed class InkSurface : FrameworkElement
                     point = pending.Start + new Vector(Math.Cos(angle), Math.Sin(angle)) * delta.Length;
                 }
             }
+            if (pending.End == point) return;
             pending.End = point;
         }
         pending.Invalidate(); InvalidateVisual();
@@ -141,7 +142,7 @@ public sealed class InkSurface : FrameworkElement
         }
         if (pending != null)
         {
-            pending.Finished = true; pending.Invalidate(); marks.Add(pending);
+            pending.Complete(); marks.Add(pending);
             if (AutoFadeEnabled) StartFade(pending);
             MarkCompleted?.Invoke(pending); pending = null;
             if (!sceneDirty) completedScene.Children.Add(DisplayDrawing(marks[^1]));

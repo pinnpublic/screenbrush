@@ -23,7 +23,7 @@ internal static class EscapeChecks
             {
                 using var controller = new AppController(new Settings { PreserveSessionOnEscape = true, ShowToolbarOnStartup = true }, false);
                 controller.Start();
-                controller.SelectTool(Tool.Marker);
+                controller.SelectTool(Tool.Marker); if (!controller.Drawing) controller.ToggleDrawing();
                 var surface = controller.Overlays[0].Surface;
                 var begin = typeof(InkSurface).GetMethod("Begin", BindingFlags.Instance | BindingFlags.NonPublic)!;
                 begin.Invoke(surface, new object?[] { new Point(20, 20), null, false }); surface.Finish();
@@ -38,8 +38,8 @@ internal static class EscapeChecks
                 var pixels = new byte[64 * 64 * 4]; bitmap.CopyPixels(pixels, 64 * 4, 0);
                 Require(Enumerable.Range(0, 64 * 64).All(i => pixels[i * 4 + 3] == 0), "Screen-operation overlay renders no visible ink.");
                 controller.Toolbar.Hide();
-                controller.SelectTool(Tool.Marker);
-                Require(controller.Drawing && surface.Visibility == Visibility.Visible && surface.MarkCount == 1, "Selecting a tool reveals retained drawing.");
+                controller.SelectTool(Tool.Marker); if (!controller.Drawing) controller.ToggleDrawing();
+                Require(controller.Drawing && surface.Visibility == Visibility.Visible && surface.MarkCount == 1, "Reenabling drawing reveals retained ink.");
                 surface.Redo(); Require(surface.MarkCount == 2, "Redo survives Esc.");
                 surface.Undo(); Require(surface.MarkCount == 1, "Undo survives Esc.");
                 Escape(); await Task.Delay(200);
@@ -51,7 +51,7 @@ internal static class EscapeChecks
                 Escape(); await Task.Delay(200);
                 Require(!controller.Drawing && !controller.Overlays[0].BoardVisible && !controller.Settings.WhiteboardEnabled, "Esc turns off board even when preserving ink.");
                 Require(surface.Zoom == 1 && controller.Overlays[0].Zoom == 2 && controller.Overlays[0].CaptureImage == null && surface.Visibility == Visibility.Hidden, "Esc shows original desktop without ink or capture while retaining target zoom.");
-                controller.SelectTool(Tool.Pencil);
+                controller.SelectTool(Tool.Pencil); if (!controller.Drawing) controller.ToggleDrawing();
                 await Task.Delay(700);
                 Require(!controller.Overlays[0].BoardVisible && !controller.Settings.WhiteboardEnabled && surface.Zoom == 2 && surface.MarkCount == 1 && surface.Visibility == Visibility.Visible, "Selecting tool restores ink and zoom, never whiteboard.");
                 controller.ToggleBoard();
@@ -70,9 +70,9 @@ internal static class EscapeChecks
                 Require(!controller.Settings.WhiteboardEnabled && !controller.Drawing, "Unchecked Esc disables whiteboard and drawing.");
                 surface.Undo(); surface.Redo();
                 Require(surface.MarkCount == 0, "Discarded session cannot return via Undo or Redo.");
-                controller.SelectTool(Tool.Marker); await Task.Delay(200);
+                controller.SelectTool(Tool.Marker); if (!controller.Drawing) controller.ToggleDrawing(); await Task.Delay(200);
                 Require(surface.MarkCount == 0 && surface.Zoom == 1 && !controller.Overlays[0].BoardVisible, "Unchecked Esc resumes with an empty normal canvas.");
-                Console.WriteLine("PASS: injected Esc hides ink/board/zoom without erasing undo/redo; tool selection restores content; settings Esc stays local.");
+                Console.WriteLine("PASS: injected Esc hides ink/board/zoom without erasing undo/redo; explicit mode switch restores content; settings Esc stays local.");
             }
             catch (Exception error) { Console.Error.WriteLine(error); Environment.ExitCode = 1; }
             finally { app.Shutdown(); }

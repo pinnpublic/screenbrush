@@ -11,7 +11,7 @@ namespace ScreenBrush;
 // Append new values so previously saved numeric tool identifiers remain valid.
 public enum Tool { Ballpoint, Pencil, Line, Arrow, Rectangle, Ellipse, Eraser, Marker }
 public enum DrawingMode { Freehand, Line, Arrow, Rectangle, Ellipse }
-public enum ActionId { Ballpoint = 1, Pencil, Line, Arrow, Rectangle, Ellipse, Eraser, ZoomIn, ZoomOut, ZoomReset, Undo, Clear, Marker, CycleColor, Quit, Redo, ColorBlue, ColorRed, ColorOrange, ColorGreen, ColorPurple, ColorBlack, ColorWhite, ToggleToolbar, ToggleBoard, BoardWhite, BoardBlack, BoardColor, BoardChalk, BoardNotebook, BoardDots, BoardImage, SaveScreen = 34, Freehand, ToggleAutoFade }
+public enum ActionId { Ballpoint = 1, Pencil, Line, Arrow, Rectangle, Ellipse, Eraser, ZoomIn, ZoomOut, ZoomReset, Undo, Clear, Marker, CycleColor, Quit, Redo, ColorBlue, ColorRed, ColorOrange, ColorGreen, ColorPurple, ColorBlack, ColorWhite, ToggleToolbar, ToggleBoard, BoardWhite, BoardBlack, BoardColor, BoardChalk, BoardNotebook, BoardDots, BoardImage, SaveScreen = 34, Freehand, ToggleAutoFade, ToggleDrawing, ToggleZoom, ToggleHoldInteraction }
 
 public sealed record ToolColor(string Color, bool CycleColors);
 
@@ -35,7 +35,8 @@ public sealed class Settings
     public Dictionary<ActionId, Shortcut> Shortcuts { get; set; } = Defaults();
     public Dictionary<ActionId, bool> EnabledActions { get; set; } = new();
     internal bool IsShortcutEnabled(ActionId action) => Enum.IsDefined(action) && (!EnabledActions.TryGetValue(action, out bool enabled) || enabled);
-    internal Dictionary<ActionId, Shortcut> ActiveShortcuts() => Shortcuts.Where(pair => IsShortcutEnabled(pair.Key)).ToDictionary(pair => pair.Key, pair => pair.Value);
+    internal Dictionary<ActionId, Shortcut> ActiveShortcuts(bool drawing = true) => Shortcuts.Where(pair => IsShortcutEnabled(pair.Key) && (drawing || pair.Key == ActionId.ToggleDrawing)).ToDictionary(pair => pair.Key, pair => pair.Value);
+    public bool HoldToInteractEnabled { get; set; } = true;
     public Key HoldKey { get; set; } = Key.LeftCtrl;
     public string Color { get; set; } = "#FF2563EB";
     public bool CycleColors { get; set; } = true;
@@ -58,12 +59,10 @@ public sealed class Settings
         Color = saved.Color; CycleColors = saved.CycleColors;
     }
     public double ColorCycleSpeed { get; set; } = 2;
-    public bool WheelZoomEnabled { get; set; } = true;
-    public ModifierKeys WheelZoomModifiers { get; set; } = ModifierKeys.Shift;
+    public int ToggleZoomPercent { get; set; } = 300;
     public int ZoomStepPercent { get; set; } = 10;
     public int MaxZoomPercent { get; set; } = 300;
     internal double ClampZoom(double value) => Math.Clamp(value, 1, MaxZoomPercent / 100.0);
-    internal bool MatchesWheelZoom(ModifierKeys modifiers) => WheelZoomEnabled && modifiers == WheelZoomModifiers;
     public bool UseDefaultCaptureName { get; set; } = true;
     public string CaptureDirectory { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures) is { Length: > 0 } pictures ? pictures : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Pictures"), "ScreenBrush");
     public double Width { get; set; } = 9;
@@ -93,6 +92,9 @@ public sealed class Settings
     public static readonly string FilePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ScreenBrush", "settings.json");
     public static Dictionary<ActionId, Shortcut> Defaults() => new()
     {
+        [ActionId.ToggleHoldInteraction] = new(Key.H, ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift),
+        [ActionId.ToggleDrawing] = new(Key.F2, ModifierKeys.Control | ModifierKeys.Shift),
+        [ActionId.ToggleZoom] = new(Key.F3, ModifierKeys.Control | ModifierKeys.Shift),
         [ActionId.ToggleAutoFade] = new(Key.A, ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift),
         [ActionId.Freehand] = new(Key.F, ModifierKeys.Control | ModifierKeys.Shift),
         [ActionId.SaveScreen] = new(Key.S, ModifierKeys.Control | ModifierKeys.Shift),
@@ -131,6 +133,9 @@ public sealed class Settings
     };
     public static string Label(ActionId action) => action switch
     {
+        ActionId.ToggleHoldInteraction => "일시 화면 조작 켜기 / 끄기",
+        ActionId.ToggleDrawing => "그리기 모드 켜기 / 해제",
+        ActionId.ToggleZoom => "확대 / 원래 배율 토글",
         ActionId.ToggleAutoFade => "자동 사라지기 켜기 / 끄기",
         ActionId.Freehand => "자유 필기",
         ActionId.SaveScreen => "화면 저장 (PNG)",
@@ -164,8 +169,8 @@ public sealed class Settings
         try { if (System.Windows.Media.ColorConverter.ConvertFromString(BoardColor) is not System.Windows.Media.Color) return "배경색이 올바르지 않습니다."; }
         catch { return "배경색이 올바르지 않습니다."; }
         if (!double.IsFinite(InkOpacity) || InkOpacity < 0 || InkOpacity > 1) return "잉크 불투명도는 0~100% 사이로 지정하세요.";
+        if (ToggleZoomPercent < 150 || ToggleZoomPercent > 500) return "확대 토글 배율은 150~500%로 지정하세요.";
         if (MaxZoomPercent < 100 || MaxZoomPercent > 600) return "최대 확대 배율은 100~600% 사이로 지정하세요.";
-        if (WheelZoomModifiers == ModifierKeys.None || (WheelZoomModifiers & ~(ModifierKeys.Control | ModifierKeys.Shift | ModifierKeys.Alt)) != 0) return "휠 확대 보조키는 Ctrl, Shift, Alt 중 하나 이상을 선택하세요.";
         if (ZoomStepPercent < 5 || ZoomStepPercent > 100) return "확대·축소 간격은 5~100% 사이로 지정하세요.";
         if (Shortcuts == null || Enum.GetValues<ActionId>().Any(a => !Shortcuts.ContainsKey(a))) return "빠진 단축키가 있습니다.";
         if (Shortcuts.Count != Enum.GetValues<ActionId>().Length) return "알 수 없는 단축키가 있습니다.";
@@ -211,7 +216,7 @@ public sealed class Settings
                     .First(s => !Shortcuts.ContainsValue(s));
             Shortcuts[ActionId.ToggleAutoFade] = replacement;
         }
-        foreach (var action in new[] { ActionId.Marker, ActionId.CycleColor, ActionId.Quit, ActionId.Redo, ActionId.ToggleToolbar, ActionId.ToggleBoard, ActionId.SaveScreen, ActionId.Freehand, ActionId.ToggleAutoFade }.Concat(Whiteboard.Palette.Select(item => item.Action)).Concat(Palette.Select(color => color.Action)))
+        foreach (var action in new[] { ActionId.Marker, ActionId.CycleColor, ActionId.Quit, ActionId.Redo, ActionId.ToggleToolbar, ActionId.ToggleBoard, ActionId.SaveScreen, ActionId.Freehand, ActionId.ToggleAutoFade, ActionId.ToggleDrawing, ActionId.ToggleZoom, ActionId.ToggleHoldInteraction }.Concat(Whiteboard.Palette.Select(item => item.Action)).Concat(Palette.Select(color => color.Action)))
         {
             if (Shortcuts.ContainsKey(action)) continue;
             var binding = Defaults()[action];

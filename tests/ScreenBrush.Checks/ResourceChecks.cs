@@ -36,7 +36,7 @@ internal static class ResourceChecks
             gen2Collections = GC.CollectionCount(2) - gen2, before, after = Snapshot() };
         results.Add(row); Console.WriteLine(JsonSerializer.Serialize(row));
     }
-    internal static void Run()
+    internal static void Run(string output = "artifacts/resource-check.json")
     {
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         AppController? controller = null; Forms.Form? fixture = null;
@@ -54,7 +54,7 @@ internal static class ResourceChecks
                 SetCursorPos(bounds.Left + bounds.Width / 2, bounds.Top + bounds.Height / 2);
                 await Task.Delay(1500);
                 await Measure("tray-idle", () => Task.Delay(8000));
-                if (controller.Drawing) controller.EnterScreenMode(); else controller.SelectTool(controller.Settings.Tool);
+                controller.ToggleDrawing();
                 await Measure("drawing-idle", () => Task.Delay(8000));
                 overlay.ChangeZoom(3); await Task.Delay(1000);
                 await Measure("zoom-300-idle", () => Task.Delay(8000));
@@ -84,8 +84,8 @@ internal static class ResourceChecks
                         for (int i = 0; i < 10; i++)
                         {
                             overlay.ChangeZoom(6); await Task.Delay(220);
-                            if (controller.Drawing) controller.EnterScreenMode(); else controller.SelectTool(controller.Settings.Tool); await Task.Delay(100);
-                            if (controller.Drawing) controller.EnterScreenMode(); else controller.SelectTool(controller.Settings.Tool); await Task.Delay(220);
+                            controller.ToggleDrawing(); await Task.Delay(100);
+                            controller.ToggleDrawing(); await Task.Delay(220);
                             controller.Execute(ActionId.ZoomReset); await Task.Delay(700);
                         }
                     });
@@ -94,12 +94,12 @@ internal static class ResourceChecks
                     GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect(); await Task.Delay(300);
                     results.Add(new { phase = $"reachable-after-gc-{batch}", resources = Snapshot() });
                 }
-                if (controller.Drawing) controller.EnterScreenMode(); else controller.SelectTool(controller.Settings.Tool);
+                controller.ToggleDrawing();
                 await Measure("returned-tray-idle", () => Task.Delay(8000));
                 controller.Dispose();
                 await Measure("after-dispose", () => Task.Delay(2000));
                 Directory.CreateDirectory("artifacts");
-                File.WriteAllText("artifacts/resource-check.json", JsonSerializer.Serialize(new { logicalProcessors = Environment.ProcessorCount,
+                File.WriteAllText(output, JsonSerializer.Serialize(new { logicalProcessors = Environment.ProcessorCount,
                     screens = Forms.Screen.AllScreens.Select(s => new { s.Bounds.Width, s.Bounds.Height }), results }, new JsonSerializerOptions { WriteIndented = true }));
             }
             catch (Exception e) { Console.Error.WriteLine(e); Environment.ExitCode = 1; }

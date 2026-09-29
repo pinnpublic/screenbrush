@@ -22,7 +22,7 @@ internal static class WhiteboardChecks
             try
             {
                 using var controller = new AppController(new Settings { PreserveSessionOnEscape = true, ShowToolbarOnStartup = true }, false);
-                controller.Start(); controller.SelectTool(Tool.Marker);
+                controller.Start(); controller.ToggleDrawing(); controller.SelectTool(Tool.Marker);
                 var overlay = controller.Overlays[0];
                 var surface = overlay.Surface;
                 typeof(InkSurface).GetMethod("Begin", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(surface, new object?[] { new Point(300, 250), null, false });
@@ -36,7 +36,7 @@ internal static class WhiteboardChecks
                 overlay.PanBy(new Vector(50, 50));
                 controller.Execute(ActionId.BoardChalk);
                 Require(overlay.BoardVisible && surface.MarkCount == 1 && surface.Zoom > 2.9, "background switching preserves ink and zoom");
-                if (controller.Drawing) controller.EnterScreenMode(); else controller.SelectTool(controller.Settings.Tool);
+                controller.ToggleDrawing();
                 Require(!overlay.BoardVisible, "screen operation hides board");
                 controller.ToggleBoard(); await WaitForZoom(surface, 3);
                 Require(overlay.BoardVisible && surface.Zoom > 2.9, "drawing restores board and zoom");
@@ -59,7 +59,7 @@ internal static class WhiteboardChecks
                 await Task.Delay(500);
                 RequireToolbarAbove(controller, overlay);
                 controller.Toolbar.Hide();
-                if (controller.Drawing) controller.EnterScreenMode(); else controller.SelectTool(controller.Settings.Tool); if (controller.Drawing) controller.EnterScreenMode(); else controller.SelectTool(controller.Settings.Tool);
+                controller.ToggleDrawing(); controller.ToggleDrawing();
                 await Task.Delay(500);
                 Require(!controller.Toolbar.IsVisible, "canvas transitions do not reopen a deliberately hidden toolbar");
                 Native.GetCursorPos(out var originalPointer);

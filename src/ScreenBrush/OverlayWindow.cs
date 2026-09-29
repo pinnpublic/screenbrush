@@ -23,6 +23,8 @@ internal sealed class OverlayWindow : Window
     internal event Action<OverlayWindow, int>? WheelForward;
     internal event Action<string>? CaptureFailed;
     internal event Action? ViewPresented;
+    internal Func<bool>? CaptureStarting { get; set; }
+    internal bool NeedsDesktopCapture => zoomVisible && !BoardView;
     private bool boardEnabled;
     private readonly Border board = new() { Background = Brushes.White, IsHitTestVisible = false, Visibility = Visibility.Collapsed };
     internal bool BoardVisible => board.Visibility == Visibility.Visible;
@@ -33,6 +35,8 @@ internal sealed class OverlayWindow : Window
         boardEnabled = value; board.Background = brush;
         UpdateView();
     }
+    private readonly Image interactionCursor = new() { IsHitTestVisible = false, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top, Visibility = Visibility.Collapsed };
+    private readonly TranslateTransform cursorPosition = new();
     private readonly Image background = new() { Stretch = Stretch.Fill, IsHitTestVisible = false };
     private readonly DispatcherTimer captureTimer;
     private DesktopCapture? capture;
@@ -40,7 +44,9 @@ internal sealed class OverlayWindow : Window
     private WriteableBitmap? pixels;
     private double zoom = 1;
     private Point anchor;
-    private bool enabled;
+    private bool enabled, temporaryInteraction, presentingBoard;
+    private bool BoardView => boardEnabled && !temporaryInteraction;
+    internal bool ZoomInteractionActive => temporaryInteraction && zoomVisible;
     private readonly Grid canvas;
     private Window? zoomWindow;
     private bool zoomVisible;
@@ -61,7 +67,7 @@ internal sealed class OverlayWindow : Window
         Left = screen.Bounds.Left; Top = screen.Bounds.Top;
         Width = screen.Bounds.Width; Height = screen.Bounds.Height;
         canvas = new Grid { ClipToBounds = true };
-        canvas.Children.Add(background); canvas.Children.Add(board); canvas.Children.Add(Surface); Content = canvas;
+        canvas.Children.Add(background); canvas.Children.Add(board); canvas.Children.Add(Surface); canvas.Children.Add(interactionCursor); interactionCursor.RenderTransform = cursorPosition; Content = canvas;
         background.RenderTransform = Surface.ViewTransform; board.RenderTransform = Surface.ViewTransform;
         canvas.PreviewMouseRightButtonDown += (_, e) =>
         {
@@ -101,17 +107,19 @@ internal sealed class OverlayWindow : Window
         }
         return IntPtr.Zero;
     }
-    internal void SetEnabled(bool value)
+    internal void SetEnabled(bool value, bool keepZoomForInteraction = false)
     {
         Surface.DrawingEnabled = value;
-        if (enabled == value) return;
+        bool interaction = !value && keepZoomForInteraction && (zoom > 1 || displayedZoom > 1);
+        if (enabled == value && temporaryInteraction == interaction) return;
+        temporaryInteraction = interaction;
         EndPan();
         Surface.Finish(); enabled = value;
         // A fully zero-alpha layered pixel is skipped by native hit testing.
         // One alpha level makes the drawing canvas receive input without an opaque veil.
         Background = value ? new SolidColorBrush(Color.FromArgb(1, 0, 0, 0)) : Brushes.Transparent;
         Surface.DrawingEnabled = value;
-        SetPassThrough(!value);
+        SetPassThrough(!value && !temporaryInteraction);
         UpdateView();
     }
     internal void SetPassThrough(bool value) => Native.PassThrough(zoomVisible ? zoomWindow! : this, value);
@@ -130,11 +138,12 @@ internal sealed class OverlayWindow : Window
     {
         board.Visibility = boardEnabled && enabled ? Visibility.Visible : Visibility.Collapsed;
         canvas.Background = boardEnabled && enabled ? Brushes.White : null;
-        if (!enabled)
+        if (!enabled && !temporaryInteraction)
         {
             StopAnimation(); displayedZoom = 1; ApplyTransform(); HideZoomWindow(); return;
         }
-        if ((boardEnabled || zoom > 1) && !zoomVisible && !ShowZoomWindow()) return;
+        if ((BoardView || zoom > 1 || temporaryInteraction) && !zoomVisible && !ShowZoomWindow()) return;
+        if (zoomVisible && presentingBoard != BoardView && !UpdateZoomBackground()) return;
         if (animating && animationTarget == zoom) return;
         if (displayedZoom == zoom) return;
         Surface.Finish();
@@ -158,7 +167,7 @@ internal sealed class OverlayWindow : Window
         if (complete)
         {
             StopAnimation();
-            if (displayedZoom == 1) { EndPan(); if (!boardEnabled) HideZoomWindow(); }
+            if (displayedZoom == 1) { EndPan(); if (!BoardView) HideZoomWindow(); }
         }
     }
     private void StopAnimation() { CompositionTarget.Rendering -= AnimateZoom; animating = false; animationClock.Stop(); zoomVelocity = 0; }
@@ -177,23 +186,24 @@ internal sealed class OverlayWindow : Window
     private void HideZoomWindow()
     {
         captureTimer.Stop();
+        bool wasVisible = zoomVisible;
         if (zoomVisible)
         {
             zoomWindow!.Content = null; Content = canvas;
             background.Source = null;
             Show(); UpdateLayout(); Native.PassThrough(this, !enabled);
             zoomWindow.Hide(); zoomVisible = false;
-            ViewPresented?.Invoke();
         }
         background.Source = null; if (zoomWindow != null) zoomWindow.Background = Brushes.Black;
         ReleaseCapture(); pixels = null;
+        if (wasVisible) ViewPresented?.Invoke();
     }
     private bool ShowZoomWindow()
     {
         if (zoomVisible) return true;
         zoomWindow ??= CreateZoomWindow();
         var hwnd = new WindowInteropHelper(zoomWindow).EnsureHandle();
-        if (!boardEnabled && !Native.SetWindowDisplayAffinity(hwnd, 0x11))
+        if (!BoardView && !Native.SetWindowDisplayAffinity(hwnd, 0x11))
         {
             int error = Marshal.GetLastWin32Error();
             zoom = 1; Surface.SetView(1, anchor);
@@ -203,14 +213,15 @@ internal sealed class OverlayWindow : Window
         // Prepare the first desktop frame before showing an opaque window.
         // Flush the hidden ink overlay so its strokes are not baked into the capture.
         Hide();
-        if (!boardEnabled)
+        if (!BoardView)
         {
             Native.DwmFlush(); CaptureFrame();
             if (pixels == null) { Show(); return false; }
         }
         ApplyTransform();
         Content = null; zoomWindow.Content = canvas;
-        zoomWindow.Background = boardEnabled ? Brushes.White : new ImageBrush(pixels) { Stretch = Stretch.Fill };
+        presentingBoard = BoardView;
+        zoomWindow.Background = BoardView ? Brushes.White : new ImageBrush(pixels) { Stretch = Stretch.Fill };
         // Let WPF present its first frame off-screen, then reveal the ready window.
         // A populated Image alone does not prevent the native window's initial clear.
         zoomWindow.Left = SystemParameters.VirtualScreenLeft + SystemParameters.VirtualScreenWidth + 256;
@@ -228,8 +239,47 @@ internal sealed class OverlayWindow : Window
         zoomVisible = true;
         zoomWindow.Show();
         Native.PassThrough(zoomWindow, false);
-        if (!boardEnabled) captureTimer.Start();
+        if (!BoardView) captureTimer.Start();
         return true;
+    }
+    private bool UpdateZoomBackground()
+    {
+        if (BoardView)
+        {
+            captureTimer.Stop(); ReleaseCapture(); pixels = null; background.Source = null;
+            zoomWindow!.Background = Brushes.White;
+        }
+        else
+        {
+            if (!Native.SetWindowDisplayAffinity(Handle, 0x11))
+            {
+                FailCapture(new Win32Exception(Marshal.GetLastWin32Error())); return false;
+            }
+            Native.DwmFlush(); CaptureFrame();
+            if (pixels == null) return false;
+            zoomWindow!.Background = new ImageBrush(pixels) { Stretch = Stretch.Fill };
+            captureTimer.Start();
+        }
+        presentingBoard = BoardView;
+        return true;
+    }
+    internal Native.POINT MapInteractionPoint(Native.POINT point)
+    {
+        // Use monitor coordinates even while the companion window prepares its
+        // first frame off-screen. Moving that HWND must not move the real cursor.
+        var dpi = VisualTreeHelper.GetDpi(canvas);
+        Point mapped = Surface.ToDocument(new Point((point.X - Screen.Bounds.Left) / dpi.DpiScaleX, (point.Y - Screen.Bounds.Top) / dpi.DpiScaleY));
+        return new Native.POINT { X = Screen.Bounds.Left + (int)Math.Round(mapped.X * dpi.DpiScaleX), Y = Screen.Bounds.Top + (int)Math.Round(mapped.Y * dpi.DpiScaleY) };
+    }
+    internal void ShowInteractionCursor(BitmapSource? image, Point screenPosition, Point hotspot)
+    {
+        if (image == null) { interactionCursor.Visibility = Visibility.Collapsed; return; }
+        var dpi = VisualTreeHelper.GetDpi(canvas);
+        Point local = new((screenPosition.X - Screen.Bounds.Left) / dpi.DpiScaleX, (screenPosition.Y - Screen.Bounds.Top) / dpi.DpiScaleY);
+        interactionCursor.Source = image;
+        interactionCursor.Width = image.PixelWidth / dpi.DpiScaleX; interactionCursor.Height = image.PixelHeight / dpi.DpiScaleY;
+        cursorPosition.X = local.X - hotspot.X / dpi.DpiScaleX; cursorPosition.Y = local.Y - hotspot.Y / dpi.DpiScaleY;
+        interactionCursor.Visibility = Visibility.Visible;
     }
     private Window CreateZoomWindow()
     {
@@ -259,7 +309,7 @@ internal sealed class OverlayWindow : Window
         using (var dc = visual.RenderOpen())
         {
             var rect = new Rect(0, 0, width, height);
-            dc.DrawRectangle(boardEnabled ? Brushes.White : new ImageBrush(pixels), null, rect);
+            dc.DrawRectangle(BoardView ? Brushes.White : new ImageBrush(pixels), null, rect);
             dc.DrawRectangle(new VisualBrush(canvas) {
                 ViewboxUnits = BrushMappingMode.Absolute,
                 Viewbox = new Rect(0, 0, canvas.ActualWidth, canvas.ActualHeight), Stretch = Stretch.Fill
@@ -273,6 +323,8 @@ internal sealed class OverlayWindow : Window
     {
         try
         {
+            if (capture == null && CaptureStarting?.Invoke() == false)
+                throw new Win32Exception("도구 모음을 화면 캡처에서 제외하지 못했습니다.");
             capture ??= new DesktopCapture(Screen.Bounds);
             PresentFrame(capture, capture.Read());
         }
@@ -308,7 +360,7 @@ internal sealed class OverlayWindow : Window
             try
             {
                 int stride = session.Width * 4;
-                if (pixels.BackBufferStride == stride) Marshal.Copy(frame, 0, pixels.BackBuffer, frame.Length);
+                if (pixels.BackBufferStride == stride) Marshal.Copy(frame, 0, pixels.BackBuffer, checked(stride * session.Height));
                 else for (int y = 0; y < session.Height; y++)
                     Marshal.Copy(frame, y * stride, IntPtr.Add(pixels.BackBuffer, y * pixels.BackBufferStride), stride);
                 pixels.AddDirtyRect(new Int32Rect(0, 0, session.Width, session.Height));
