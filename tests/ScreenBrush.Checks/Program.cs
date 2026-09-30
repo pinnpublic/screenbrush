@@ -401,8 +401,14 @@ internal static class Program
         Check(legacy.Shortcuts[ActionId.Quit] == new Shortcut(Key.F4, ModifierKeys.Alt), "Missing exit shortcut receives Alt F4.");
         var duplicate = settings.Clone(); duplicate.Shortcuts[ActionId.Pencil] = duplicate.Shortcuts[ActionId.Ballpoint];
         Check(duplicate.Validate() != null, "Duplicate shortcuts must be rejected.");
-        var plain = settings.Clone(); plain.Shortcuts[ActionId.Pencil] = new Shortcut(Key.A, ModifierKeys.None);
-        Check(plain.Validate() != null, "Plain letters must not be registered globally.");
+        foreach (var key in new[] { Key.A, Key.D1, Key.Delete, Key.Space, Key.Up, Key.F1 })
+        {
+            var plain = settings.Clone();
+            plain.Shortcuts[ActionId.Pencil] = new Shortcut(key, ModifierKeys.None);
+            Check(plain.Validate() == null, "Single-key shortcuts are accepted.");
+            var loaded = Settings.ReadSettings(System.Text.Json.JsonSerializer.Serialize(plain));
+            Check(loaded.Shortcuts[ActionId.Pencil] == plain.Shortcuts[ActionId.Pencil], "Single-key shortcuts survive settings loading.");
+        }
         var invalid = settings.Clone(); invalid.Width = double.NaN;
         Check(invalid.Validate() != null, "Invalid widths must be rejected.");
         string path = Path.Combine(Path.GetTempPath(), "ScreenBrush-check-" + Guid.NewGuid() + ".json");

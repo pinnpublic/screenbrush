@@ -175,7 +175,6 @@ public sealed class Settings
         if (Shortcuts == null || Enum.GetValues<ActionId>().Any(a => !Shortcuts.ContainsKey(a))) return "빠진 단축키가 있습니다.";
         if (Shortcuts.Count != Enum.GetValues<ActionId>().Length) return "알 수 없는 단축키가 있습니다.";
         if (Shortcuts.Values.Any(s => s == null || s.Key == Key.None || !Enum.IsDefined(s.Key) || IsModifier(s.Key) || (s.Modifiers & ~(ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift | ModifierKeys.Windows)) != 0)) return "유효한 키 조합을 입력하세요.";
-        if (Shortcuts.Values.Any(s => s.Modifiers == ModifierKeys.None && s.Key != Key.Escape && (s.Key < Key.F1 || s.Key > Key.F24))) return "문자 키에는 Ctrl, Alt, Shift 또는 Win을 함께 지정하세요.";
         if (Shortcuts.Values.Any(s => s.Key == Key.Escape && s.Modifiers == ModifierKeys.None)) return "Esc는 화면 조작으로 돌아가는 고정 키입니다.";
         if (ActiveShortcuts().Values.Distinct().Count() != ActiveShortcuts().Count) return "중복된 단축키가 있습니다.";
         if (!IsModifier(HoldKey) && HoldKey != Key.Space) return "일시 조작 키는 보조 키 또는 Space를 선택하세요.";

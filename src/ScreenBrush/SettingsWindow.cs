@@ -192,6 +192,7 @@ internal sealed class SettingsWindow : Window
         }));
         panel.Children.Add(new TextBlock { Text = "마우스가 있는 모니터의 화면과 필기를 PNG로 저장합니다. 기본 파일명을 끄면 저장할 때 이름을 지정합니다. 같은 이름은 번호를 붙여 보존합니다.", FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) });
         panel = AddSection(sections, "단축키");
+        panel.Children.Add(new TextBlock { Text = "입력 칸을 선택한 뒤 원하는 키를 누르세요. A, 1, Delete처럼 키 하나만 지정하거나 Ctrl·Alt·Shift·Win과 조합할 수 있습니다. Esc는 화면 조작으로 돌아가는 고정 키입니다.", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) });
         panel.Children.Add(new TextBlock { Text = "그리기 모드 전환 키는 항상, 다른 단축키는 그리기 모드에서만 사용합니다. 체크된 단축키만 등록합니다(기본: 모두 켜짐). 해제해도 버튼·컨트롤은 사용할 수 있습니다. 입력 즉시 중복·등록 충돌을 확인합니다. 충돌한 키를 변경하거나 체크를 해제하면 저장할 수 있습니다.", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 16) });
         var boxes = new Dictionary<ActionId, TextBox>();
         foreach (ActionId action in Enum.GetValues<ActionId>().OrderBy(action => action >= ActionId.ToggleBoard && action <= ActionId.BoardImage ? 2 : Settings.Palette.Any(color => color.Action == action) ? 1 : 0))
